@@ -1,0 +1,17 @@
+cargo-features = ["profile-rustflags"]
+
+[package]
+name = "ebpf-xdp"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+common = { path = "../common" }
+
+[package.metadata.bpf-linker]
+btf = true
+

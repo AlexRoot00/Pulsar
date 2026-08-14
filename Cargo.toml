@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/common",
+    "crates/ebpf-xdp",
+    "crates/ctl",
+    "crates/daemon"
+]
+exclude = [
+    "crates/ebpf-tc"
+]
+
+[workspace.package]
+edition = "2024"
+license = "Apache-2.0"
+repository = ""
+
+[workspace.dependencies]
+common = { path = "crates/common" }
+libc = "0.2"
+libbpf-rs = "0.26.2"
+mio = { version = "1", features = ["os-poll", "os-ext", "net"] }
+prost = "0.13"
+tokio = { version = "1", features = ["full", "net", "io-util", "sync", "time", "rt-multi-thread", "macros"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+journald = "0.7"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+prometheus = "0.13"
+lazy_static = "1"
+socket2 = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+ctrlc = "3.4"

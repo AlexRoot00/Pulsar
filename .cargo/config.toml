@@ -1,0 +1,15 @@
+[target.bpfel-unknown-none]
+linker = "bpf-linker"
+
+rustflags = [
+  "-C",
+  "panic=abort",
+  "-C",
+  "relocation-model=static",
+  "-C",
+  "debuginfo=2",
+  "-C",
+  "strip=none",
+  "-C",
+  "link-arg=--btf",
+]
