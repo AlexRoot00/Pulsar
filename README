@@ -106,7 +106,6 @@ sudo ./target/debug/ebpf-daemon --config ./config2.yml >test.log
 
 Options:
 - `--config <path>` — path to the YAML configuration file (default: `config2.yml`)
-- `--prog-id <N>` — explicit BPF program ID (otherwise auto-detected via `bpftool`)
 - `-h, --help` — show usage
 
 The daemon:
@@ -124,7 +123,7 @@ The daemon:
 ./target/release/ebpf-ctl test config2.yml
 
 # List ACL rules
-./target/release/ebpf-ctl acl list --iface end0
+./target/release/ebpf-ctl acl list 
 
 # Add an ACL rule
 ./target/release/ebpf-ctl acl add drop src 192.168.0.2/32 dst 0.0.0.0/0:80 proto tcp
