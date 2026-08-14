@@ -1,45 +1,267 @@
-# Pulsar
+# Pulsar — eBPF XDP Firewall
 
 Pulsar is a high-performance programmable network security dataplane built with Rust and eBPF.
 
-The project is designed to provide high-speed packet processing in the Linux kernel while maintaining a modular architecture. It combines packet filtering, traffic control, and service delivery into a single programmable dataplane.
+The project is designed to provide high-speed packet processing in the Linux kernel while maintaining a modular architecture. It combines packet filtering, traffic control, and service delivery into a single, efficient system.
+
+An eBPF program for the XDP (eXpress Data Path) with support for:
+
+- **L4 ACL** — allow/drop rules by (src_ip, dst_ip, protocol, src_port, dst_port) via LPM_TRIE
+- **VLAN ACL** — VLAN ID based rules (QinQ / 802.1AD support)
+- **Connection tracking** — TCP/UDP session tracking (LRU_PERCPU_HASH)
+- **Rate limiting** — token bucket per source (global + per-rule)
+- **Events** — ringbuf with event kind filtering
+- **Counters** — per-CPU aggregated counters
 
 ## Features
 
 ### XDP Module
 
-- IPv4 / IPv6 packet parsing
-- Ethernet frame processing
-- VLAN / QinQ support
-- Access Control Lists (ACL)
-- Rate limiting
-- Load balancing
-- Connection tracking (WIP)
-- Packet statistics
-- Event reporting
+- **IPv4 / IPv6 packet parsing** — Full support for both protocols
+- **Ethernet frame processing** — Layer 2 handling
+- **VLAN / QinQ support** — VLAN ID based rules and QinQ / 802.1AD support
+- **Access Control Lists (ACL)** — allow/drop rules by (src_ip, dst_ip, protocol, src_port, dst_port) via LPM_TRIE
+- **Rate limiting** — Token bucket per source (global + per-rule)
+- **Load balancing** — Service delivery and backend selection
+- **Connection tracking** — TCP/UDP session tracking (LRU_PERCPU_HASH) [WIP]
+- **Packet statistics** — Per-CPU aggregated counters
+- **Event reporting** — Ringbuf with event kind filtering
 
 ### Control Plane
 
-- CLI management utility
-- Control daemon (planned)
+- CLI management utility (`ebpf-ctl`)
+- Control daemon (`ebpf-daemon`)
 - eBPF map management
-- Rule management
+- Rule management and configuration loading
+
+## Architecture
+
+```
+Pulsar
+├── crates/
+│   ├── common/       — shared types, constants and map macros (no_std)
+│   ├── ebpf-xdp/     — eBPF XDP program (no_std, #![no_main], BTF .maps section)
+│   ├── daemon/       — ebpf-daemon: ringbuf consumer + Unix socket API + config loader
+│   ├── ctl/          — ebpf-ctl: CLI for managing maps via the daemon
+│   └── ebpf-tc/      — TC program (outside workspace, for NAT / load balancing)
+├── .cargo/config.toml — cross-compilation settings for bpfel-unknown-none
+├── Bpf.toml           — BPF program metadata (name, path)
+└── config2.yml        — example configuration file
+```
+
+### Components
+
+| Component | Binary        | Description |
+|-----------|---------------|-------------|
+| `ebpf-xdp` | `libebpf_xdp.so` | eBPF program loaded into the kernel via `ip link set dev … xdp obj` |
+| `daemon`  | `ebpf-daemon`   | Ringbuf event consumer + Unix socket management API (`/tmp/ebpf-daemon.sock`) |
+| `ctl`     | `ebpf-ctl`      | CLI for ACL, VLAN ACL, counters, config reload |
+| `common`  | —               | Shared types (`L4AclKey`, `Event`, `CounterId`, etc.) |
+
+## Requirements
+
+- **Rust nightly** (required for `#![no_std]` and `-Zbuild-std`)
+- **bpf-linker** — linker for the eBPF target
+- **bpftool** — for auto-detecting maps and programs (daemon + ctl)
+- **ip** (iproute2) — for attaching the XDP program to an interface
+- Linux kernel 5.8+ with BTF support and `bpfel-unknown-none` target
+- Root privileges for loading BPF programs and accessing maps
+
+Install bpf-linker:
+
+```bash
+cargo +nightly install bpf-linker
+```
 
 ## Build
 
+### 1. Build the eBPF program (XDP)
+
+Requires nightly Rust and the `bpfel-unknown-none` target:
+
 ```bash
-git clone https://github.com/AlexRoot00/pulsar.git
-cd pulsar
+cargo +nightly build -p ebpf-xdp --target bpfel-unknown-none -Zbuild-std=core,panic_abort --release
+```
 
+Artifact: `target/bpfel-unknown-none/release/libebpf_xdp.so`
 
-cargo build --release -p pulsar-ctl
+### 2. Build the management utilities (daemon + ctl)
+
+Standard native build:
+
+```bash
+cargo build -p daemon -p ctl --release
+```
+
+Artifacts:
+- `target/release/ebpf-daemon`
+- `target/release/ebpf-ctl`
+
+### Full build cycle (clean + rebuild)
+
+```bash
+cargo clean
+
+# eBPF program
+cargo +nightly build -p ebpf-xdp --target bpfel-unknown-none -Zbuild-std=core,panic_abort --release
+
+# Management utilities
+cargo build -p daemon -p ctl --release
 ```
 
 ## Running
 
+### 1. Attach the XDP program to an interface
+
 ```bash
-sudo ./target/release/pulsar-agent
-sudo ./target/release/pulsar-ctl
+# Detach any existing XDP program
+sudo ip link set dev end0 xdp off
+
+# Load and attach the eBPF program
+sudo ip link set dev end0 xdp obj target/bpfel-unknown-none/release/libebpf_xdp.so sec xdp verbose
+```
+
+Replace `end0` with your network interface name.
+
+### 2. Start the daemon
+
+```bash
+sudo ./target/release/ebpf-daemon --config ./config2.yml >test.log
+```
+
+Options:
+- `--config <path>` — path to the YAML configuration file (default: `config2.yml`)
+- `--prog-id <N>` — explicit BPF program ID (otherwise auto-detected via `bpftool`)
+- `-h, --help` — show usage
+
+The daemon:
+1. Loads the configuration and populates BPF maps (`l4_acl`, `vlan_acl`, `event_mask`)
+2. Subscribes to the ringbuf `events` map and logs events
+3. Serves a Unix socket at `/tmp/ebpf-daemon.sock` for management commands
+
+### 3. Management with ebpf-ctl
+
+```bash
+# Check XDP attachment
+./target/release/ebpf-ctl acl check-attach --iface end0
+
+# Validate a configuration file
+./target/release/ebpf-ctl test config2.yml
+
+# List ACL rules
+./target/release/ebpf-ctl acl list --iface end0
+
+# Add an ACL rule
+./target/release/ebpf-ctl acl add drop src 192.168.0.2/32 dst 0.0.0.0/0:80 proto tcp
+
+# Add a VLAN rule (single VLAN)
+./target/release/ebpf-ctl acl vlan add 300 drop
+
+# Add a QinQ rule (outer 200 / inner 100)
+./target/release/ebpf-ctl acl vlan add 200 drop inner 100
+
+# List VLAN rules
+./target/release/ebpf-ctl acl vlan list --iface end0
+
+# Counters
+./target/release/ebpf-ctl counters show --iface end0
+
+# Event log management
+./target/release/ebpf-ctl event-log list
+./target/release/ebpf-ctl event-log enable PacketDrop
+./target/release/ebpf-ctl event-log disable RateLimited
+
+# Reload configuration in the daemon
+./target/release/ebpf-ctl reload config2.yml
+```
+
+Additional commands: `conntrack show`, `rate-limit show`.
+
+## Configuration (config2.yml)
+
+```yaml
+acl:
+  default_action: allow          # default action when no rule matches (allow)
+  allow:
+    - vlan:
+        - 300                     # single VLAN
+        - outer: 100               # QinQ: outer + inner
+          inner:
+            - 200
+            - 101
+      rate: 1                    # rate in packets/sec
+    - src:
+        addresses:
+          - 192.168.0.2/32
+          - 192.168.100.0/24
+      dst:
+        addresses: 192.168.0.202
+        ports:
+          number: 80             # any | number | CIDR
+          proto: tcp             # tcp | udp | icmp | icmpv6
+      rate: 1
+  drop:
+    - vlan:
+        - 250
+        - outer: 130
+          inner: [100]
+    - src:
+        addresses: [fe80::/64]
+      dst:
+        addresses: [fe80::c274:2bff:fefa:720c]
+        ports:
+          number: any
+          proto: icmp
+
+logging:                       # enable/disable event kinds
+  PacketDrop: true
+  RateLimited: false
+  ConntrackMiss: false
+  BackendSelected: false
+  SlowPath: false
+  ServiceMatched: true
+  VlanDetected: true
+  PacketAllow: false
+
+rate_limit:
+  global:
+    max_tokens: 65536
+    refill_per_sec: 64000
+  per_rule_multiplier: 256
+
+monitoring:
+  ringbuf_bytes: 16777216        # ringbuf size in bytes
+  poll_interval_ms: 100          # ringbuf poll interval
+```
+
+## BPF Maps
+
+| Map          | Type            | Description |
+|--------------|-----------------|-------------|
+| `events`     | ringbuf         | Event log (PacketDrop, RateLimited, VlanDetected, etc.) |
+| `event_mask` | ARRAY (u64)     | Bitmask of enabled event kinds |
+| `l4_acl`     | LPM_TRIE        | L4 ACL: (family, src_addr, dst_addr, proto, dst_port, src_port) → (action, rate) |
+| `vlan_acl`   | HASH            | VLAN ACL: (outer_vlan, inner_vlan) → (action, rate) |
+| `ip_acl`     | LPM_TRIE        | L3 IP ACL with CIDR support |
+| `counters`   | PERCPU_ARRAY    | Packet/byte counters (RxPackets, Dropped, AclDrop, RateLimited, etc.) |
+| `conntrack`  | LRU_PERCPU_HASH | Connection tracking table |
+| `rate_limit` | PERCPU_HASH     | Token bucket: (addr, rule_id, family) → (tokens, last_refill, counters) |
+| `lb_backends`| ARRAY           | Backend servers for load balancing |
+| `lb_devmap`  | DEVMAP          | Device map for `bpf_redirect_map` |
+| `lb_meta`    | ARRAY           | LB metadata (backend count) |
+| `lb_services`| HASH            | VIP services for load balancing |
+| `xsk_map`    | XSKMAP          | XDP sockets for AF_XDP |
+
+## XDP Dataplane Pipeline
+
+```
+Packet → parse_packet → VLAN parse → IP parse (IPv4/IPv6) → L4 parse (TCP/UDP/ICMP)
+  → VLAN ACL check (if present)
+  → rate limiting (global or per-rule)
+  → L4 ACL lookup (LPM against l4_acl)
+  → conntrack lookup
+  → emit event (to ringbuf)
+  → XDP_PASS / XDP_DROP / XDP_TX / XDP_REDIRECT
 ```
 
 ## Project Status
@@ -65,7 +287,7 @@ Planned:
 
 The project is currently tested on:
 
-- Linux Kernel 6.x
+- Linux Kernel 6.x (and 5.8+)
 - XDP (native mode)
 - Virtual Ethernet (veth)
 - Network namespaces
