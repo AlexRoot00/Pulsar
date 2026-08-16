@@ -17,7 +17,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: add dependencies
-      run: apt install -y build-essential clang llvm libelf-dev pkg-config linux-tools-$(uname -r)
+      run: sudo apt install -y build-essential clang llvm libelf-dev pkg-config linux-tools-$(uname -r)
     - name: add rust
       run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh && . "$HOME/.cargo/env"
     - name: add nightly component
