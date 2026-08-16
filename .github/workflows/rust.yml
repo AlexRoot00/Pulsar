@@ -25,7 +25,7 @@ jobs:
     - name: rustup override set nightly
       run:  rustup override set nightly 
     - name: cargo install cargo-binstall && cargo binstall bpf-linker
-      run: cargo install cargo-binstall && cargo binstall bpf-linker
+      run: cargo install cargo-binstall && cargo binstall -y bpf-linker
     - name: rustup self update
       run: rustup self update
     - name: rustup update nightly
