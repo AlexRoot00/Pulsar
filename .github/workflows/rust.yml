@@ -2,39 +2,51 @@ name: Rust
 
 on:
   push:
-    branches: [ "master" ]
+    branches: ["master"]
   pull_request:
-    branches: [ "master" ]
+    branches: ["master"]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
-    - name: add dependencies
-      run: sudo apt install -y build-essential clang llvm libelf-dev pkg-config linux-tools-$(uname -r)
-    - name: add rust
-      run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -y | sh && . "$HOME/.cargo/env"
-    - name: add nightly component
-      run: rustup +nightly component add rust-src 
-    - name: rustup override set nightly
-      run:  rustup override set nightly 
-    - name: cargo install cargo-binstall && cargo binstall bpf-linker
-      run: cargo install cargo-binstall && cargo binstall -y bpf-linker
-    - name: rustup self update
-      run: rustup self update
-    - name: rustup update nightly
-      run: rustup update nightly
-    - name : rustup target add bpfel-unknown-none
-      run: rustup target add bpfel-unknown-none
-    - name: Build ebpf-xdp ctl
-      run: cargo +nightly build -p ebpf-xdp  --target bpfel-unknown-none  -Zbuild-std=core,panic_abort  --release --verbose
-    - name: Build daemon & 
-      run: cargo build -p daemon -p ctl
-    - name: Run tests
-      run: cargo test --verbose
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            clang \
+            llvm \
+            libelf-dev \
+            pkg-config
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Install bpf-linker
+        run: |
+          cargo install cargo-binstall
+          cargo binstall -y bpf-linker
+
+      - name: Build eBPF
+        run: |
+          cargo +nightly build \
+            -p ebpf-xdp \
+            --target bpfel-unknown-none \
+            -Z build-std=core,panic_abort \
+            --release \
+            --verbose
+
+      - name: Build userspace
+        run: cargo build --workspace --exclude ebpf-xdp --verbose
+
+      - name: Run tests
+        run: cargo test --workspace --exclude ebpf-xdp --verbose
