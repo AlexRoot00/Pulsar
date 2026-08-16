@@ -20,13 +20,13 @@ acl:
 
   drop:
     - vlan:
-      - 140
-      - outer: 130
-        inner:
-          - 100
-  - src:
-      addresses:
-        - fe80::/64
+        - 140
+        - outer: 130
+          inner:
+            - 100
+    - src:
+        addresses:
+          - fe80::/64
       dst:
         addresses:
           - fe80::c274:2bff:fefa:720c
@@ -51,4 +51,3 @@ rate_limit:
 monitoring:
   ringbuf_bytes: 16777216
   poll_interval_ms: 100
-
