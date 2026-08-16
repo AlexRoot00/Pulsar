@@ -19,7 +19,7 @@ jobs:
     - name: add dependencies
       run: sudo apt install -y build-essential clang llvm libelf-dev pkg-config linux-tools-$(uname -r)
     - name: add rust
-      run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh && . "$HOME/.cargo/env"
+      run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -y | sh && . "$HOME/.cargo/env"
     - name: add nightly component
       run: rustup +nightly component add rust-src 
     - name: rustup override set nightly
