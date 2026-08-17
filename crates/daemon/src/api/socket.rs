@@ -147,7 +147,7 @@ pub struct CounterData {
 
 /// Handle a single client connection
 fn handle_client(mut stream: UnixStream) -> Result<()> {
-    let mut buffer = [0; 4096];
+    let mut buffer = [0; 65536];
 
     // Read command from client
     let n = stream.read(&mut buffer)?;
