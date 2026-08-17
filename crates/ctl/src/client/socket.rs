@@ -158,7 +158,7 @@ pub fn send_command(command: Command) -> Result<Response, anyhow::Error> {
     stream.write_all(&command_data)?;
 
     // Read response
-    let mut buffer = [0; 4096];
+    let mut buffer = [0; 65536];
     let n = stream.read(&mut buffer)?;
 
     if n == 0 {
