@@ -1,0 +1,11 @@
+id  plen  fam  src                                dst                                proto sport  dport  rate  action
+0   320   4    192.168.0.2                        192.168.0.202                      tcp  any    80     1     Allow
+1   320   4    192.168.100.0                      192.168.0.202                      tcp  any    80     1     Allow
+2   304   4    195.154.212.27                     195.154.212.11                     udp  any    any    -     Drop
+---VLAN---
+id    outer_vlan inner_vlan action   rate  
+0     130        100        drop     0     
+1     200        100        allow    1     
+2     300        -          allow    1     
+3     200        101        allow    1     
+4     140        -          drop     0     

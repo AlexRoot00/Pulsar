@@ -1,0 +1,93 @@
+Architecture:                         x86_64
+CPU op-mode(s):                       32-bit, 64-bit
+Address sizes:                        46 bits physical, 57 bits virtual
+Byte Order:                           Little Endian
+CPU(s):                               32
+On-line CPU(s) list:                  0-31
+Vendor ID:                            AuthenticAMD
+BIOS Vendor ID:                       AMD
+Model name:                           AMD EPYC 8124P 16-Core Processor
+BIOS Model name:                      AMD EPYC 8124P 16-Core Processor                 CPU @ 2.4GHz
+BIOS CPU family:                      107
+CPU family:                           25
+Model:                                160
+Thread(s) per core:                   2
+Core(s) per socket:                   16
+Socket(s):                            1
+Stepping:                             2
+Frequency boost:                      enabled
+CPU(s) scaling MHz:                   106%
+CPU max MHz:                          2450.0000
+---
+driver: bnxt_en
+version: 6.8.0-88-generic
+firmware-version: 229.2.75.0/pkg 22.92.07.50
+expansion-rom-version: 
+bus-info: 0000:01:00.0
+supports-statistics: yes
+supports-test: yes
+supports-eeprom-access: yes
+supports-register-dump: yes
+supports-priv-flags: no
+---
+Settings for eno12399np0:
+	Supported ports: [ FIBRE ]
+	Supported link modes:   25000baseCR/Full
+	                        1000baseX/Full
+	                        10000baseCR/Full
+	Supported pause frame use: Symmetric Receive-only
+	Supports auto-negotiation: Yes
+	Supported FEC modes: RS	 BASER
+	Advertised link modes:  25000baseCR/Full
+	                        1000baseX/Full
+	                        10000baseCR/Full
+	Advertised pause frame use: No
+	Advertised auto-negotiation: Yes
+	Advertised FEC modes: Not reported
+	Link partner advertised link modes:  Not reported
+	Link partner advertised pause frame use: Symmetric
+	Link partner advertised auto-negotiation: No
+	Link partner advertised FEC modes: Not reported
+	Speed: 25000Mb/s
+	Lanes: 1
+---
+NIC statistics:
+     [0]: rx_ucast_packets: 211196071
+     [0]: rx_discards: 36031
+     [0]: rx_ucast_bytes: 23513469946
+     [1]: rx_ucast_packets: 211197853
+     [1]: rx_mcast_packets: 4
+     [1]: rx_bcast_packets: 10
+     [1]: rx_discards: 14315
+     [1]: rx_ucast_bytes: 23517783273
+     [1]: rx_mcast_bytes: 472
+     [1]: rx_bcast_bytes: 3450
+     [2]: rx_ucast_packets: 211205494
+     [2]: rx_discards: 2461
+     [2]: rx_ucast_bytes: 23516047500
+     [2]: rx_l4_csum_errors: 2
+     [3]: rx_ucast_packets: 214673112
+     [3]: rx_mcast_packets: 1482
+     [3]: rx_discards: 4841610
+     [3]: rx_ucast_bytes: 23740705152
+     [3]: rx_mcast_bytes: 174876
+     [4]: rx_ucast_packets: 211219533
+     [4]: rx_discards: 769
+     [4]: rx_ucast_bytes: 23518047972
+     [4]: rx_l4_csum_errors: 2
+     [5]: rx_ucast_packets: 211210740
+     [5]: rx_ucast_bytes: 23515496245
+     [6]: rx_ucast_packets: 211214146
+     [6]: rx_discards: 413
+     [6]: rx_ucast_bytes: 23509417218
+     [7]: rx_ucast_packets: 211221072
+     [7]: rx_mcast_packets: 75
+     [7]: rx_ucast_bytes: 23510824062
+     [7]: rx_mcast_bytes: 8850
+     [8]: tx_ucast_packets: 3009
+     [8]: tx_ucast_bytes: 356829
+     [9]: tx_ucast_packets: 3202
+     [9]: tx_ucast_bytes: 386064
+     [10]: tx_ucast_packets: 3005
+     [10]: tx_ucast_bytes: 333296
+     [11]: tx_ucast_packets: 3887
