@@ -119,12 +119,12 @@ jobs:
 
       - name: Build release
         run: |
-          cross build \
+          cargo build \
             --release \
             -p daemon \
             -p ctl \
             --target ${{ matrix.target }}
-
+            
       - name: Prepare release artifacts
         run: |
           mkdir -p artifacts
