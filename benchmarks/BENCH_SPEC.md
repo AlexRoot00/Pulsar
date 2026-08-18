@@ -26,43 +26,14 @@ rate limit token-bucket, conntrack + ringbuf events) and document the methodolog
 
 ---
 
-## 2. Test Stand
+## 2. Distribution and Software
 
-### 2.1 DUT (Device Under Test) — target server
-Server **EM-I120E-NVMe** on **AMD EPYC 8024P** (8 cores / 16 threads, 2.4 GHz),
-**64 GB RAM**, **2 × 960 GB NVMe**. Network — **1 Gbps** (possible upgrade
-to **25 Gbps** board/module).
-
-> Note: at 1 Gbps the theoretical linear ceiling ≈ **1,488 Mpps** per port
-> (~1 Gbit/s). This is a **network bottleneck, not CPU**: EPYC 8024P has
-> sufficient power to not be the bottleneck at 1G. At 25 Gbps transition
-> (≈37 Mpps per port) ≥16 cores needed, isolated from IRQ.
-
-### 2.2 Minimum vs target parameters
-| Resource | Minimum for baseline | Target on EPYC 8024P | For 25G scale |
-|---|---|---|---|
-| Network | 1 × 1G | 1 × 1G (or 25G if possible) | 2 × 25G |
-| CPU | ≥4 cores | 8C/16T, isolate ≥4 cores in `isolcpus` | ≥16 cores |
-| RAM | 4 GB | 64 GB | 64 GB |
-
-### 2.3 Topology
-```
-[Traffic Generator] <-- NIC --> [DUT: XDP (EPYC 8024P, 1G)]
-```
-For baseline XDP_PASS, throughput measured on a single DUT port (incoming
-traffic → XDP_PASS → kernel stack; no egress to another port). For drop-scenarios —
-same, packets are dropped in XDP.
-
----
-
-## 3. Distribution and Software
-
-### 3.1 OS DUT
+### 2.1 OS DUT
 - **RHEL / Rocky Linux / AlmaLinux 9.x** (9.4+) — primary option.
 - **Ubuntu Server LTS 22.04 / 24.04** — alternative.
 - Kernel **Linux ≥ 6.6** (XDP native + improved BPF); `uname -r` is recorded in report.
 
-### 3.2 DUT packages
+### 2.2 DUT packages
 `bpftool`, `llvm`/`clang` (LLVM 16+), `libbpf-rs`/`libbpf-dev`, nightly-rustc with
 `-Z build-std` for `bpfel-unknown-none`, `iproute2`, `ethtool`, `sysstat`
 (`mpstat`/`sar`), `perf`, `nftables`, `iptables`. NIC driver (`igb`/`igc`/`ixgbe`/`mlx5_core`) — as loadable module.
@@ -88,34 +59,9 @@ Generators are divided into two types of use. For baseline XDP — `iperf3`/pktg
 suitability as a control reference, but **pure PPS baseline requires exactly XDP-oriented
 or kernel pktgen**; `iperf3` gives lower, since it goes through TCP stack.
 
-**A. "Install package" (control/reference traffic)**
 
-- `iperf3` — `yum install iperf3` / `apt install iperf3`. TCP/UDP refill; convenient
-  for checking "L4 throughput on the bench", but doesn't give 64B line-rate
-  and doesn't measure p99 latency at packet level (through TCP stack).
-- **pktgen** (kernel) — pure PPS baseline. On RHEL/Rocky: `yum install kernel-modules-extra`,
-  then `modprobe pktgen` (module is part of kernel, installed from extra).
-  On Ubuntu: `apt install linux-tools-$(uname -r)` (utility `pktgen`) + `modprobe pktgen`.
-  Management — through `/proc/net/pktgen/` (`pgpenge`/`pktgen`-util), not apt/yum package.
 
-**B. "Build from sources" (main XDP generators, line-rate + latency)**
-
-- **TRex** (DPDK/C compiler) — GitHub `cisco-system-trafficgenerator/trex`.
-  Build: download release archive `.tar.gz`, unpack, `sudo ./dpdk_setup_ports.py`,
-  `./t-rex-64 -f stl/...`. Requires: GCC/Clang, DPDK-compatible NIC, `numactl`.
-- **MoonGen** (DPDK/Lua) — GitHub `erimat/moonGen`. Build:
-  `git clone https://github.com/erimat/moonGen && cd MoonGen && make`,
-  then `dpdk-devbind` for NIC binding; run `./moongen`.
-  Requires: GCC/Clang, DPDK, LuaJIT.
-- **Scapy-based / `tc`-gen** — for single packets/functional runs
-  (`pip install scapy`; `scapy`-generate → `tcpreplay`).
-
-> **Important:** DPDK generators (TRex/MoonGen) work only if NIC is detached
-> from kernel (`dpdk-devbind --bind=vfio-pci <NIC>`/`uio_pci_generic`); in this
-> mode DUT and generator are different hosts. If generator is on the same host —
-> use `veth` pair + `xdp` on veth, or `ns`-netns.
-
-### 3.4 How to build eBPF program (dataplane)
+### 2.4 How to build eBPF program (dataplane)
 ```bash
 # 1) toolchain (nightly + bpf target)
 rustup toolchain install nightly --profile minimal --component rust-src
@@ -137,7 +83,7 @@ sudo ip link set dev <iface> xdp off
 > Artifact `libebpf_xdp.so` has `.text` section in `sec xdp` (see
 > `xdp_prog.rs:71-73`) — `ip ...` searches for `xdp` symbol `xdp_dataplane`.
 
-### 3.5 Benchmark run order
+### 2.5 Benchmark run order
 
 #### DUT requirements
 1. XDP attached on IFACE: `sudo ip link set dev enp6s18 xdpdrv obj target/bpfel-unknown-none/release/libebpf_xdp.so sec xdp`
@@ -198,9 +144,9 @@ Counter growth check during run:
 
 ---
 
-## 4. XDP Modes and sysctl
+## 3. XDP Modes and sysctl
 
-### 4.1 Native (`xdpdrv`) vs Generic (`xdpgeneric`) — how to choose
+### 3.1 Native (`xdpdrv`) vs Generic (`xdpgeneric`) — how to choose
 - **Native** (`xdpdrv`): `sudo ip link set dev <iface> xdpdrv obj …`. Accurate numbers —
   packet passes at early driver stage, before entering netdev backlog. Requires driver
   with XDP support (`ixgbe`/`ice`/`mlx5_core`/`i40e`; at 1G — `igc`/`igb` not on all
@@ -213,7 +159,7 @@ Counter growth check during run:
 **Conclusion:** measure **B — native** as reference; **C — generic** only as fallback;
 **A — without sysctl** for assessing "tuning overhead".
 
-### 4.2 Tuning and sysctl (requires root)
+### 3.2 Tuning and sysctl (requires root)
 Below is a set of rules. If applied without root, `sysctl` prints
 `permission denied … ignoring` and the rule **is NOT applied** — the test will be
 less correct. Always run under root or in `--privileged`/netns with needed capabilities.
@@ -247,27 +193,11 @@ vm.swappiness = 0                   # so swap doesn't interfere with measurement
 #   echo 2-7 > /proc/irq/<IRQ>/smp_affinity_list
 ```
 
-> The logs above mention `permission denied` exactly because sysctl rules
-> and IRQ affinity require privileges. For measurements **must** apply them
-> fully — otherwise results are not comparable.
 
-`bench_xdp.sh` applies key sysctl automatically at startup (compare mode).
 
-### 4.3 Run matrix (what to measure)
-| Variant | sysctl tuning | XDP mode | Note |
-|---|---|---|---|
-| A | no tuning (control/"raw") | generic | less accurate numbers; bottleneck = backlog/NAPI |
-| B | with §4.2 tuning | native | reference |
-| C | with tuning | generic | fallback, if `xdpdrv` on 1G chip doesn't work |
+## 4. Metrics and Sources
 
-Measure **B as primary**, A for "tuning overhead" comparison, C only if
-no native support on specific chip.
-
----
-
-## 5. Metrics and Sources
-
-### 5.1 KPI (per run)
+### 4.1 KPI (per run)
 PPS, Gbps, drop rate (gen→DUT), p50/p99/max latency, CPU utilization on RX cores.
 
 ### 5.2 Data sources
@@ -292,7 +222,7 @@ Formulas:
 
 ---
 
-## 6. Scenarios
+## 5. Scenarios
 
 | № | Scenario | What we do | Packets / sizes | KPI |
 |---|---|---|---|---|
@@ -307,19 +237,10 @@ hide parsing issues on small packets (64B — main stress).
 
 ---
 
-## 7. Acceptance Criteria (SLO — framework, to be approved)
-
-| Scenario | Target on EPYC 8024P / 1G | Acceptable |
-|---|---|---|
-| S1 1G line-rate | ≈1,488 Mpps per port, 64B | network — bottleneck; CPU must not be ≥90% |
-| S2 ACL Drop (16K) | ≥ 80% of baseline PPS | ≤ 20% drop |
-| S3 Rate limit | stream = 64 Kpps + correct RateLimited counter | — |
-| S4 VLAN QinQ | ≥ 90% of baseline PPS | ≤ 10% drop |
-| S5 Scale (1M flows) | PPS ≥ 85% baseline | ≤ 15% drop |
 
 ---
 
-## 8. Methodology
+## 6. Methodology
 
 1. Before each run — record baseline counters (`bpftool map dump`, or restart DUT).
 2. Generator maintains target PPS; `daemon` writes counters to Grafana.
@@ -330,9 +251,3 @@ hide parsing issues on small packets (64B — main stress).
    deviation >5% — repeat.
 
 ---
-
-## 9. Open Questions
-- Confirm 1G chip on EPYC has `xdpdrv` support (otherwise — compare B vs C).
-- Approve SLO from §7 for specific NIC (1G now; plan 25G?).
-- Generator choice (pktgen vs TRex/MoonGen).
-- Status of excluded components (`ebpf-tc`, AF_XDP) in deployment — document.
