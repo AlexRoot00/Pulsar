@@ -11,10 +11,11 @@ env:
 
 jobs:
   build:
+    name: Build
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Install system dependencies
         run: |
@@ -46,7 +47,141 @@ jobs:
             --verbose
 
       - name: Build userspace
-        run: cargo build --workspace --exclude ebpf-xdp --verbose
+        run: |
+          cargo build \
+            --workspace \
+            --exclude ebpf-xdp \
+            --verbose
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            clang \
+            llvm \
+            libelf-dev \
+            pkg-config
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Install bpf-linker
+        run: |
+          cargo install cargo-binstall
+          cargo binstall -y bpf-linker
 
       - name: Run tests
-        run: cargo test --workspace --exclude ebpf-xdp --verbose
+        run: |
+          cargo test \
+            --workspace \
+            --exclude ebpf-xdp \
+            --verbose
+
+
+  # ============================================================
+  # 3. RELEASE BUILD
+  # ============================================================
+  release-build:
+    name: Release build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    needs: test
+
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            arch: x86_64
+
+          - target: aarch64-unknown-linux-gnu
+            arch: arm64
+
+          - target: riscv64gc-unknown-linux-gnu
+            arch: riscv64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cross
+        run: |
+          cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build release
+        run: |
+          cross build \
+            --release \
+            --workspace \
+            --exclude ebpf-xdp \
+            --target ${{ matrix.target }}
+
+      - name: Prepare release artifacts
+        run: |
+          mkdir -p artifacts
+
+          cp target/${{ matrix.target }}/release/ebpf-daemon \
+            artifacts/ebpf-daemon-${{ matrix.arch }}
+
+          cp target/${{ matrix.target }}/release/ebpf-ctl \
+            artifacts/ebpf-ctl-${{ matrix.arch }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulsar-${{ matrix.arch }}
+          path: artifacts/
+
+
+  # ============================================================
+  # 4. GITHUB RELEASE
+  # ============================================================
+  release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    needs: release-build
+
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release archives
+        run: |
+          mkdir -p release
+
+          for dir in artifacts/pulsar-*; do
+            arch=$(basename "$dir" | sed 's/^pulsar-//')
+
+            tar -czf "release/pulsar-${arch}.tar.gz" \
+              -C "$dir" .
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v0.1.0
+          name: Pulsar v0.1.0
+          generate_release_notes: true
+          files: release/*
