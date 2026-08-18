@@ -275,7 +275,7 @@ fn acl_l4(packet: &Packet) -> Option<(AclAction, u32)> {
                 };
                 if !val.is_null() {
                     let acl_val = unsafe { &*val };
-                    return Some((acl_val.action, acl_val.priority));
+                    return Some((acl_val.action, acl_val.rate));
                 }
             }
         } else { // AF_INET (IPv4)
@@ -314,7 +314,7 @@ fn acl_l4(packet: &Packet) -> Option<(AclAction, u32)> {
                 let val: *mut L4AclValue = unsafe { bpf_map_lookup_elem((&raw mut l4_acl).cast::<c_void>(), &key) };
                 if !val.is_null() {
                     let acl_val = unsafe { &*val };
-                    return Some((acl_val.action, acl_val.priority));
+                    return Some((acl_val.action, acl_val.rate));
                 }
             }
         }

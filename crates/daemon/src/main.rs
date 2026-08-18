@@ -1,6 +1,6 @@
 use std::env;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use anyhow::{Result, anyhow};
@@ -16,6 +16,10 @@ mod monitoring;
 mod config;
 
 const SOCKET_PATH: &str = "/tmp/ebpf-daemon.sock";
+
+/// XDP program id passed via --prog-id (if any). Used by the socket server
+/// to detect legacy XDP attachments that do not create BPF link objects.
+static DAEMON_PROG_ID: Mutex<Option<u32>> = Mutex::new(None);
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -52,6 +56,11 @@ fn main() -> Result<()> {
          warn!("Failed to load initial config {}: {}", config_path, e);
          warn!("Starting without configuration. Use 'ebpf-ctl reload <config>' to load later.");
      }
+
+     // Store prog_id for legacy XDP attachment detection in the socket server.
+    if let Some(pid) = prog_id {
+        *DAEMON_PROG_ID.lock().unwrap() = Some(pid as u32);
+    }
 
     // Shared state for graceful shutdown
     let running = Arc::new(AtomicBool::new(true));
@@ -114,14 +123,14 @@ USAGE:
     ebpf-daemon [OPTIONS]
 
 OPTIONS:
-   --prog-id N         BPF program id (bpftool prog show | grep xdp)
+   --prog-id N         BPF program id (auto-detected via libbpf if omitted)
     --config <path>     Path to configuration YAML file (default: config2.yml)
    -h, --help          Print this help message
 
 DETECTION ORDER:
    1. Use explicit --prog-id if provided
-   2. Try bpftool map show name events
-   3. Scan XDP programs and inspect their map_ids
+   2. Scan loaded BPF maps for an 'events' ringbuf (libbpf-rs)
+   3. Scan XDP programs and inspect their map ids (libbpf-rs)
 
 EXAMPLES:
    ebpf-daemon --prog-id 212              # Get events map from XDP program id

@@ -7,7 +7,6 @@
   use common::CounterId;
   use common::maps::{L4AclKey, VlanAclKey, VlanAclValue};
   use libbpf_rs::{MapCore, MapFlags, MapHandle};
-  use std::process::Command;
   use serde_yaml;
   use tracing::info;
  
@@ -271,57 +270,23 @@
  
  /// Count entries in conntrack map.
  pub fn conntrack_count() -> Result<usize, MapError> {
-     // Try libbpf-rs first, fall back to bpftool
-     match open_map_by_name(CONNTRACK_MAP) {
-         Ok(map) => {
-             let count = map.keys().count();
-             Ok(count)
-         }
-         Err(_) => {
-             // Fall back to bpftool
-             let output = Command::new("bpftool")
-                 .args(["map", "dump", "name", CONNTRACK_MAP])
-                 .output()
-                 .map_err(MapError::Io)?;
- 
-             if !output.status.success() {
-                 return Ok(0); // Map might not exist
-             }
- 
-             let stdout = String::from_utf8_lossy(&output.stdout);
-             let entries: Vec<serde_json::Value> =
-                 serde_json::from_str(&stdout).map_err(|e| MapError::Json(format!("{e}: {stdout}")))?;
-             Ok(entries.len())
-         }
-     }
- }
+      // Enumerate keys via libbpf-rs. A missing map is treated as empty.
+      match open_map_by_name(CONNTRACK_MAP) {
+          Ok(map) => Ok(map.keys().count()),
+          Err(MapError::NotFound(_)) => Ok(0),
+          Err(e) => Err(e),
+      }
+  }
  
  /// Count entries in rate_limit map.
  pub fn rate_limit_count() -> Result<usize, MapError> {
-     // Try libbpf-rs first, fall back to bpftool
-     match open_map_by_name(RATE_LIMIT_MAP) {
-         Ok(map) => {
-             let count = map.keys().count();
-             Ok(count)
-         }
-         Err(_) => {
-             // Fall back to bpftool
-             let output = Command::new("bpftool")
-                 .args(["map", "dump", "name", RATE_LIMIT_MAP])
-                 .output()
-                 .map_err(MapError::Io)?;
- 
-             if !output.status.success() {
-                 return Ok(0); // Map might not exist
-             }
- 
-             let stdout = String::from_utf8_lossy(&output.stdout);
-             let entries: Vec<serde_json::Value> =
-                 serde_json::from_str(&stdout).map_err(|e| MapError::Json(format!("{e}: {stdout}")))?;
-             Ok(entries.len())
-         }
-     }
- }
+      // Enumerate keys via libbpf-rs. A missing map is treated as empty.
+      match open_map_by_name(RATE_LIMIT_MAP) {
+          Ok(map) => Ok(map.keys().count()),
+          Err(MapError::NotFound(_)) => Ok(0),
+          Err(e) => Err(e),
+      }
+  }
  
  // ---------------------------------------------------------------------------
  // ACL (l4_acl) — LPM_TRIE

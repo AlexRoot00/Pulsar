@@ -1,7 +1,7 @@
 //! `ebpf-ctl` — utility for managing `ebpf-xdp` maps.
 //!
 //! Subcommands:
-//!   acl check-attach --iface <dev>
+//!   check-attach --iface <dev>
 //!   acl list
 //!   acl add <allow|drop> src <ip>:<port|any> dst <ip>:<port|any> [proto tcp|udp|icmp] [rate <pps>] [--print-key]
 //!   acl del --id <n>
@@ -53,6 +53,7 @@ fn run(args: &[String]) -> Result<i32, String> {
     }
 
     match args[0].as_str() {
+        "check-attach" => check_attach_cmd(&args[1..]),
         "acl" => acl_cmd(&args[1..]),
         "counters" => counters_cmd(&args[1..]),
         "conntrack" => conntrack_cmd(&args[1..]),
@@ -71,8 +72,8 @@ fn run(args: &[String]) -> Result<i32, String> {
 fn print_usage() {
     println!(
         "Usage:
-  ebpf-ctl acl check-attach --iface <dev>
-  ebpf-ctl acl list
+   ebpf-ctl check-attach --iface <dev>
+   ebpf-ctl acl list
   ebpf-ctl acl add <allow|drop> src <ip>:<port|any> dst <ip>:<port|any> [proto tcp|udp|icmp] [rate <pps>] [--print-key]
   ebpf-ctl acl del --id <n>
   ebpf-ctl acl vlan list
@@ -221,10 +222,9 @@ fn parse_endpoint(s: &str, name: &str, proto: Proto) -> Result<(acl_key::AclAddr
 
 fn acl_cmd(args: &[String]) -> Result<i32, String> {
     if args.is_empty() {
-        return Err("usage: ebpf-ctl acl <check-attach|list|add|del|vlan> ...".into());
+        return Err("usage: ebpf-ctl acl <list|add|del|vlan> ...".into());
     }
     match args[0].as_str() {
-        "check-attach" => acl_check_attach(&args[1..]),
         "list" => acl_list(&args[1..]),
         "add" => acl_add(&args[1..]),
         "del" => acl_del(&args[1..]),
@@ -233,7 +233,7 @@ fn acl_cmd(args: &[String]) -> Result<i32, String> {
     }
 }
 
-fn acl_check_attach(args: &[String]) -> Result<i32, String> {
+fn check_attach_cmd(args: &[String]) -> Result<i32, String> {
     let iface = get_opt(&["--iface", "-i"], args)
         .ok_or_else(|| "--iface <dev> required (e.g., end0)".to_string())?;
 

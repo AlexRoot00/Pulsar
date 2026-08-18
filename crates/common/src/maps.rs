@@ -248,7 +248,8 @@ impl L4AclKey {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct L4AclValue {
     pub action: AclAction,
-    pub priority: u32,
+    /// Packets-per-second rate limit (0 = unlimited).
+    pub rate: u32,
     pub backend_group: u32,
     pub flags: u32,
 }
@@ -289,7 +290,8 @@ impl IpLpmKey {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AclValue {
     	pub action: AclAction,
-    	pub priority: u32,
+	/// Packets-per-second rate limit (0 = unlimited).
+	pub rate: u32,
     	pub backend_group: u32,
     	pub flags: u32,
 }
@@ -298,7 +300,8 @@ pub struct AclValue {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FlowAclValue {
     	pub action: AclAction,
-    	pub priority: u32,
+	/// Packets-per-second rate limit (0 = unlimited).
+	pub rate: u32,
     	pub backend_group: u32,
     	pub flags: u32,
 }

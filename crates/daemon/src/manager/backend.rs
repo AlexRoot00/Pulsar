@@ -14,8 +14,6 @@
 //! Map names match `btf_map!` in ebpf-xdp/src/xdp_prog.rs:
 //!   lb_backends, lb_devmap, lb_meta.
 
-use std::process::Command;
-
 use super::{
     acl_key::Ipv4,
     maps::{MapError, key_to_hex, map_delete, map_update, open_map_by_name},
@@ -265,31 +263,22 @@ fn backend_from_bytes(bytes: &[u8]) -> Backend {
 }
 
 /// Resolve ifindex to interface name (for human-readable output).
-/// Uses `ip -o link show`, since libc::if_indextoname is inconvenient without
-/// buffer allocation; on error returns None.
+/// Uses `libc::if_indextoname` directly — no external `ip` command dependency.
 fn ifindex_to_name(ifindex: u32) -> Option<String> {
     if ifindex == 0 {
         return None;
     }
-    let output = Command::new("ip")
-        .args(["-o", "link", "show"])
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    for line in text.lines() {
-        // Format: "<ifindex>: <name>: ..."
-        let idx_end = line.find(':')?;
-        let idx: u32 = line[..idx_end].trim().parse().ok()?;
-        if idx == ifindex {
-            let after = &line[idx_end + 1..];
-            let name_end = after.find(':')?;
-            let name = &after[..name_end].trim();
-            // Remove @... suffix (e.g., eth1@if5)
-            let name = name.split('@').next().unwrap_or(name);
-            return Some(name.to_string());
-        }
+    let mut buf = [0u8; libc::IFNAMSIZ as usize];
+    let result = unsafe {
+        libc::if_indextoname(ifindex, buf.as_mut_ptr() as *mut libc::c_char)
+    };
+    if result.is_null() {
+        return None;
     }
-    None
+    let name_end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    let raw_name = std::str::from_utf8(&buf[..name_end]).ok()?;
+    let name = raw_name.split('@').next().unwrap_or(raw_name);
+    Some(name.to_string())
 }
 
 /// Indicator "backend unhealthy" (for display).

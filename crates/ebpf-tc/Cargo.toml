@@ -1,0 +1,15 @@
+[package]
+name = "ebpf-tc"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+path = "src/lib.rs"
+#crate-type = ["staticlib"]
+#crate-type = ["cdylib"]
+[dependencies]
+common.workspace = true
+[package.metadata.bpf-linker]
+btf = true

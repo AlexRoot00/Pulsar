@@ -1,8 +1,14 @@
+//! Consume the eBPF `events` ringbuf and log events.
+//!
+//! Map/program discovery is done entirely through the libbpf-rs / libbpf API
+//! (see `Cargo.toml`); no `bpftool` subprocess is used.
+
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use common::{Event, EventKind, FlowKey};
-use libbpf_rs::{MapHandle, RingBufferBuilder};
+use libbpf_rs::query::{MapInfoIter, ProgInfoIter, ProgInfoQueryOptions};
+use libbpf_rs::{MapCore, MapHandle, MapType, ProgramType, RingBufferBuilder};
 use tracing::{debug, info, warn};
 
 #[derive(Clone, Debug)]
@@ -26,10 +32,10 @@ impl<'a> RingbufMonitor<'a> {
     pub fn new(prog_id: Option<i32>) -> Result<Self> {
         let events_map = if let Some(prog_id) = prog_id {
             get_events_map_for_prog(prog_id)?
-        } else if let Ok(map) = get_events_map_via_bpftool() {
+        } else if let Ok(map) = get_events_map_via_libbpf() {
             map
         } else {
-            return Err(anyhow::anyhow!(
+            return Err(anyhow!(
                 "Could not get events map. Use --prog-id <id> or ensure an XDP program is loaded"
             ));
         };
@@ -80,203 +86,101 @@ fn parse_event(data: &[u8]) -> Option<Event> {
     Some(unsafe { std::ptr::read_unaligned(data.as_ptr() as *const Event) })
 }
 
-fn get_events_map_from_map_id(id: i32) -> Result<EventsMap> {
-    let info = get_map_info(id)?;
-    if info.name != "events" || info.map_type != "ringbuf" {
-        return Err(anyhow!(
-            "Map id {} is not events ringbuf (name={}, type={})",
-            id,
-            info.name,
-            info.map_type
-        ));
-    }
+// ---------------------------------------------------------------------------
+// events ringbuf discovery (libbpf-rs query API, no bpftool)
+// ---------------------------------------------------------------------------
 
-    Ok(EventsMap {
-        id,
-        size: info.max_entries,
+/// Open a loaded map by its global id and return it if it is the `events`
+/// ringbuf. Mirrors the former `bpftool map show id <id>` lookup.
+fn events_map_from_id(map_id: u32) -> Result<Option<EventsMap>> {
+    let handle = match MapHandle::from_map_id(map_id) {
+        Ok(h) => h,
+        Err(e) => {
+            debug!("events map lookup by id {} failed: {}", map_id, e);
+            return Ok(None);
+        }
+    };
+
+    let is_events_ringbuf =
+        handle.name().to_str() == Some("events") && handle.map_type() == MapType::RingBuf;
+
+    Ok(if is_events_ringbuf {
+        Some(EventsMap {
+            id: map_id as i32,
+            size: handle.max_entries() as usize,
+        })
+    } else {
+        None
     })
 }
 
-fn get_events_map_for_prog(prog_id: i32) -> Result<EventsMap> {
-    let map_ids = get_map_ids_for_prog(prog_id)?;
-    let mut errors = Vec::new();
+/// Scan every loaded BPF map (via libbpf) for the `events` ringbuf map.
+fn events_map_by_name() -> Result<Option<EventsMap>> {
+    for info in MapInfoIter::default() {
+        if info.ty != MapType::RingBuf {
+            continue;
+        }
+        if info.name.to_str().map(|n| n == "events").unwrap_or(false) {
+            return Ok(Some(EventsMap {
+                id: info.id as i32,
+                size: info.max_entries as usize,
+            }));
+        }
+    }
+    Ok(None)
+}
 
-    for map_id in map_ids {
-        match get_events_map_from_map_id(map_id) {
-            Ok(map) => return Ok(map),
-            Err(err) => {
-                warn!("Skipping map id {}: {}", map_id, err);
-                errors.push(format!("map id {map_id}: {err}"));
+/// Find the `events` ringbuf among the maps referenced by program `prog_id`.
+///
+/// Replaces `bpftool prog show id <prog_id>` + `bpftool map show id <map_id>`:
+/// libbpf's program info API already exposes the program's map ids.
+fn get_events_map_for_prog(prog_id: i32) -> Result<EventsMap> {
+    let opts = ProgInfoQueryOptions::default().include_map_ids(true);
+    for prog in ProgInfoIter::with_query_opts(opts) {
+        if prog.id != prog_id as u32 {
+            continue;
+        }
+        for map_id in &prog.map_ids {
+            if let Some(em) = events_map_from_id(*map_id)? {
+                return Ok(em);
             }
         }
     }
 
+    // `map_ids` can be empty on some libbpf/kernel combinations; fall back to a
+    // global scan by name (the `events` ringbuf is loaded globally, not per-prog).
+    if let Some(em) = events_map_by_name()? {
+        return Ok(em);
+    }
+
     Err(anyhow!(
-        "Could not find events ringbuf in prog {} maps:\n{}",
-        prog_id,
-        errors.join("\n")
+        "no 'events' ringbuf map found for program id {}",
+        prog_id
     ))
 }
 
-fn get_map_ids_for_prog(prog_id: i32) -> Result<Vec<i32>> {
-    use std::process::Command;
-
-    let output = Command::new("bpftool")
-        .args(["prog", "show", "id", &prog_id.to_string()])
-        .output()
-        .map_err(|e| anyhow!("Failed to execute bpftool: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        return Err(anyhow!(
-            "bpftool prog show id {} failed: {}{}",
-            prog_id,
-            stdout,
-            stderr
-        ));
+/// Find the `events` ringbuf map. Replaces the former `bpftool`-based discovery:
+///  1. scan loaded maps for an `events` ringbuf (was `bpftool map show name events`);
+///  2. fall back to scanning XDP programs and inspecting their map ids.
+fn get_events_map_via_libbpf() -> Result<EventsMap> {
+    if let Some(em) = events_map_by_name()? {
+        return Ok(em);
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    info!("bpftool prog show id {}: {}", prog_id, stdout.trim());
-
-    let mut map_ids: Vec<i32> = Vec::new();
-    for line in stdout.lines() {
-        if let Some((_, ids)) = line.split_once("map_ids") {
-            for id in ids.split(|c: char| c == ',' || c.is_ascii_whitespace()) {
-                if let Ok(map_id) = id.trim_matches(':').parse::<i32>() {
-                    map_ids.push(map_id);
-                }
+    let opts = ProgInfoQueryOptions::default().include_map_ids(true);
+    for prog in ProgInfoIter::with_query_opts(opts) {
+        if prog.ty != ProgramType::Xdp {
+            continue;
+        }
+        for map_id in &prog.map_ids {
+            if let Some(em) = events_map_from_id(*map_id)? {
+                return Ok(em);
             }
-        }
-    }
-
-    if map_ids.is_empty() {
-        return Err(anyhow!("No map_ids found for prog {}", prog_id));
-    }
-
-    Ok(map_ids)
-}
-
-#[derive(Clone, Debug)]
-struct MapInfo {
-    name: String,
-    map_type: String,
-    max_entries: usize,
-}
-
-fn get_map_info(map_id: i32) -> Result<MapInfo> {
-    use std::process::Command;
-
-    let output = Command::new("bpftool")
-        .args(["map", "show", "id", &map_id.to_string()])
-        .output()
-        .map_err(|e| anyhow!("Failed to execute bpftool: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        return Err(anyhow!(
-            "bpftool map show id {} failed: {}{}",
-            map_id,
-            stdout,
-            stderr
-        ));
-    }
-
-    parse_map_info(&String::from_utf8_lossy(&output.stdout))
-        .ok_or_else(|| anyhow!("Could not parse bpftool map info for id {}", map_id))
-}
-
-fn parse_map_info(text: &str) -> Option<MapInfo> {
-    let mut words = text.split_whitespace();
-    let _id = words.next()?;
-    let map_type = words.next()?.to_string();
-    let mut name = String::new();
-    let mut max_entries = 0usize;
-
-    while let Some(word) = words.next() {
-        match word {
-            "name" => name = words.next()?.to_string(),
-            "max_entries" => max_entries = words.next()?.parse().ok()?,
-            _ => {}
-        }
-    }
-
-    if name.is_empty() || max_entries == 0 {
-        None
-    } else {
-        Some(MapInfo {
-            name,
-            map_type,
-            max_entries,
-        })
-    }
-}
-
-fn get_events_map_via_bpftool() -> Result<EventsMap> {
-    use std::process::Command;
-
-    let output = Command::new("bpftool")
-        .args(["map", "show", "name", "events"])
-        .output()
-        .map_err(|e| anyhow!("Failed to execute bpftool: {}", e))?;
-
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        for line in stdout.lines() {
-            if let Some(info) = parse_map_info(line) {
-                if info.name == "events" && info.map_type == "ringbuf" {
-                    if let Some(id_str) = line.split_whitespace().next() {
-                        if let Ok(id) = id_str.trim_matches(':').parse::<i32>() {
-                            return Ok(EventsMap {
-                                id,
-                                size: info.max_entries,
-                            });
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let output = Command::new("bpftool")
-        .args(["prog", "show"])
-        .output()
-        .map_err(|e| anyhow!("Failed to execute bpftool: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!("bpftool failed: {}", stderr));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    debug!("bpftool prog show: {}", stdout.trim());
-
-    let mut xdp_progs: Vec<i32> = stdout
-        .lines()
-        .filter(|line| line.contains(": xdp"))
-        .filter_map(|line| {
-            line.split_whitespace()
-                .next()
-                .and_then(|s| s.trim_matches(':').parse::<i32>().ok())
-        })
-        .collect();
-    xdp_progs.sort_unstable_by(|left, right| right.cmp(left));
-
-    if xdp_progs.is_empty() {
-        return Err(anyhow!("No XDP programs found"));
-    }
-
-    for prog_id in xdp_progs {
-        info!("Trying XDP program id: {}", prog_id);
-        if let Ok(map) = get_events_map_for_prog(prog_id) {
-            return Ok(map);
         }
     }
 
     Err(anyhow!(
-        "Could not find events map for any XDP program. Use --prog-id <id>"
+        "Could not get events map. Use --prog-id <id> or ensure an XDP program is loaded"
     ))
 }
 

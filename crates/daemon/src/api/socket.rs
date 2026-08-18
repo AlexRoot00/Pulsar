@@ -432,7 +432,8 @@ fn process_command(command: Command) -> Result<Response> {
         }
         // XDP attachment check
         Command::CheckXdpAttached { iface } => {
-            let info = check_xdp_attached(&iface)?;
+            let known_pid = crate::DAEMON_PROG_ID.lock().unwrap().clone();
+            let info = check_xdp_attached(&iface, known_pid)?;
             tracing::debug!("check_xdp_attached raw: {}", info.raw);
             Ok(Response::AttachmentResult {
                 attached: info.attached,

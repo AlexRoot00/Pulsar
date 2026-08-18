@@ -413,7 +413,7 @@ pub struct AclRule {
     /// If true — match on tcp_flags (not used by CLI, always 0).
     pub tcp_flags: u8,
     /// Rate limiting: packets per second. 0 = no rate limit.
-    /// Value stored in priority field (first 16 bits) for compatibility.
+    /// Stored in the `rate` field of the map value (L4AclValue / AclValue / FlowAclValue).
     pub rate: u32,
 }
 
@@ -531,7 +531,7 @@ impl AclRule {
     }
 
     /// Build value (16 bytes).
-    ///   action: u32 LE, priority: u32 LE (stored here as rate), backend_group: u32 LE, flags: u32 LE
+    ///   action: u32 LE, rate: u32 LE, backend_group: u32 LE, flags: u32 LE
     pub fn build_value(&self) -> Vec<u8> {
         let mut v = Vec::with_capacity(16);
         v.extend_from_slice(&(self.action as u32).to_le_bytes()); // action = Drop(1)
