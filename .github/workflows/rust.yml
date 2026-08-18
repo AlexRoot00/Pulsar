@@ -121,8 +121,8 @@ jobs:
         run: |
           cross build \
             --release \
-            --workspace \
-            --exclude ebpf-xdp \
+            -p daemon \
+            -p ctl \
             --target ${{ matrix.target }}
 
       - name: Prepare release artifacts
