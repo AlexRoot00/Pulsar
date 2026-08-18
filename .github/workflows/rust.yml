@@ -122,8 +122,8 @@ jobs:
           cargo build \
             --release \
             -p daemon \
-            -p ctl \
-            --target ${{ matrix.target }}
+            -p ctl 
+
             
       - name: Prepare release artifacts
         run: |
