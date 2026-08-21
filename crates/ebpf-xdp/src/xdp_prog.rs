@@ -71,17 +71,21 @@ unsafe fn bpf_ringbuf_submit(data: *mut c_void, flags: u64) {
 #[unsafe(link_section = "xdp")]
 #[unsafe(no_mangle)]
 pub extern "C" fn xdp_dataplane(ctx: *mut xdp_md) -> u32 {
-    match xdp_dataplane_inner(ctx) {
+    let action = match xdp_dataplane_inner(ctx) {
         Ok(action) => action,
-        Err(ParseError::Unsupported) => {
-            incr_counter(CounterId::Passed, 1);
-            XDP_PASS
-        }
+        // Unsupported ethertype / L4 protocol: hand the packet to the stack.
+        Err(ParseError::Unsupported) => XDP_PASS,
         Err(ParseError::Malformed) => {
             incr_counter(CounterId::ParseError, 1);
             XDP_ABORTED
         }
+    };
+    // Count every passed packet exactly once. Previously `Passed` was only
+    // bumped on the Unsupported path, so it never reflected a normal XDP_PASS.
+    if action == XDP_PASS {
+        incr_counter(CounterId::Passed, 1);
     }
+    action
 }
 /// Main XDP dataplane processing pipeline.
 /// Packet processing stages:
@@ -100,7 +104,12 @@ fn xdp_dataplane_inner(ctx: *mut xdp_md) -> Result<u32, ParseError> {
     let data = unsafe { (*ctx).data as usize };
     let data_end = unsafe { (*ctx).data_end as usize };
     let packet = parse_packet(data,data_end)?;
-     // Skip fragmented packets.
+
+    // Count every parsed packet before any early return. Fragments and
+    // VLAN-ACL drops used to be missing from RxPackets/RxBytes, which skewed
+    // pps/Gbps and the drop percentage computed by benchmarks/bench_xdp.sh.
+    incr_counter(CounterId::RxPackets, 1);
+    incr_counter(CounterId::RxBytes, packet.len);
 	// VLAN statistics/debug
     if packet.vlan_depth > 0 {
         incr_counter(CounterId::RxVlan, 1);
@@ -155,9 +164,6 @@ fn xdp_dataplane_inner(ctx: *mut xdp_md) -> Result<u32, ParseError> {
     }
     
     if packet.is_fragment { return Ok(XDP_PASS); }
-    // Update traffic counters.
-    incr_counter(CounterId::RxPackets, 1);
-    incr_counter(CounterId::RxBytes, packet.len);
     // Apply ACL rules and get rate limit for this rule.
     let (acl_action, rate) = acl_action(&packet);
     match acl_action {
@@ -170,10 +176,12 @@ fn xdp_dataplane_inner(ctx: *mut xdp_md) -> Result<u32, ParseError> {
         AclAction::Allow => {
             incr_counter(CounterId::AclAllow, 1);
             emit_event(ctx, &packet.flow, EventKind::PacketAllow, 0, 0);
-            // Apply rate limiting:
-            // - rate > 0: per-rule rate limiting
-            // - rate = 0: global rate limiting (MAX_TOKENS=65536, REFILL=64000/sec)
-            if !apply_rate_limit(&packet, rate) {
+            // Apply rate limiting only when the matched rule asks for it.
+            // rate == 0 means "no limit": it used to fall back to a global
+            // token bucket (65536 tokens, 64000/s refill) keyed by source IP,
+            // which capped the default pass path and made throughput depend
+            // on the CPU count of the box.
+            if rate > 0 && !apply_rate_limit(&packet, rate) {
                 incr_counter(CounterId::Dropped, 1);
                 incr_counter(CounterId::RateLimited, 1);
                 emit_event(ctx, &packet.flow, EventKind::RateLimited, packet.len, 0);
@@ -190,11 +198,10 @@ fn xdp_dataplane_inner(ctx: *mut xdp_md) -> Result<u32, ParseError> {
 
 #[inline(always)]
 fn acl_action(packet: &Packet) -> (AclAction, u32) {
+    // Counters are bumped by the caller so that each packet is accounted for
+    // exactly once. Incrementing AclDrop here as well made the counter report
+    // twice the real number of dropped packets.
     match acl_l4(packet) {
-        Some((AclAction::Drop, rate)) => {
-            incr_counter(CounterId::AclDrop, 1);
-            (AclAction::Drop, rate)
-        }
         Some((action, rate)) => { (action, rate) }
         None => { (AclAction::Allow, 0) }
     }
@@ -565,7 +572,7 @@ fn parse_ipv6(data: usize,data_end: usize,l3: usize,packet_len: u64,) -> Result<
 	    };
 	let payload_offset = l4_off + l4_len;
 	if data + payload_offset > data_end {return Err(ParseError::Malformed);}
-    if ip_proto == IP_PROTO_ICMPV6 {incr_counter(CounterId::RxIcmpv6, 1);}
+    // RxIcmpv6 is counted once by the L4 stats match in xdp_dataplane_inner.
  	Ok(Packet {
     	flow: FlowKey {
         	src_addr,
@@ -590,7 +597,10 @@ fn parse_ipv6(data: usize,data_end: usize,l3: usize,packet_len: u64,) -> Result<
 /// Apply token bucket rate limiting for a packet.
 /// 
 /// If rate_pps > 0: applies per-rule rate limiting with custom rate.
-/// If rate_pps = 0: applies global rate limiting (MAX_TOKENS=65536, REFILL=64000/sec).
+/// If rate_pps = 0: falls back to the global bucket (MAX_TOKENS=65536,
+/// REFILL=64000/sec). The dataplane no longer takes that path — there
+/// rate == 0 means "unlimited" — so this branch is kept only as a fallback
+/// for direct callers.
 /// 
 /// Returns `true` if the packet is allowed, `false` if rate limited.
 #[inline(always)]
@@ -626,8 +636,12 @@ fn apply_rate_limit(packet: &Packet, rate_pps: u32) -> bool {
             packet_count: 1,
             byte_count: packet.len,
         };
-        let rc = unsafe { bpf_map_update_elem((&raw mut rate_limit).cast::<c_void>(), &key, &initial, BPF_ANY) };
-        return rc >= 0;
+        // Fail open. `bpf_map_update_elem` starts failing once the map holds
+        // MAX_RATE_LIMIT_ENTRIES source IPs (trivially reached by a flood with
+        // random source addresses); turning that into a drop takes the box
+        // down and shows up in benchmarks as bogus rate_limited packets.
+        let _rc = unsafe { bpf_map_update_elem((&raw mut rate_limit).cast::<c_void>(), &key, &initial, BPF_ANY) };
+        return true;
     }
     
     let bucket = unsafe { &mut *value };
